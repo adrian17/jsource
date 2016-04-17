@@ -14,6 +14,15 @@ a = 6
 'syntax error' -: ex ') /'
 'syntax error' -: ex ') ('
 
+NB. test nvr management: many names on a line, and multiple identical nvrs
+a =: 1
+4097 = ". 'a' ,~ ; 4096 # <'a + '
+
+a =: 1e7$2
+multi =: 3 : 'a =: a =: a [ a + a'
+a -: multi^:100 a
+
+
 4!:55 ;:'a'
 
 

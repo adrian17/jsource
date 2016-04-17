@@ -11,48 +11,51 @@
 /* a value referenced in the parser which is the value of a name        */
 /* (that is, in some symbol table).                                     */
 /*                                                                      */
-/* jt->nvra      NVR stack a: stack of A values                         */
+/* jt->nvra      NVR stack a: stack of A values.  LSB is a flag         */
 /* jt->nvrav     AAV(jt->nvra)                                          */
-/* jt->nvrb      NVR stack b: corresponding to stack a --               */
-/*               1 if unchanged; 0 if redefined                         */
-/* jt->nvrbv     BAV(jt->nvrb)                                          */
 /* jt->nvrtop    index of top of stack                                  */
 /*                                                                      */
 /* Each call of the parser records the current NVR stack top (nvrtop),  */
-/* (nvrtop), and pop stuff off the stack back to that top on exit       */
+/* and pop stuff off the stack back to that top on exit       */
 /*                                                                      */
-/* nvrpush(w):   w is a named value just moved from the parser queue    */
-/*               to the parser stack.  Push w onto the NVR stack.       */
-/* nvrpop(otop): pop stuff off the NVR stack back to the old top otop   */
-/* nvrredef(w):  w is the value of a name about to be redefined         */
-/*               (reassigned or erased).  checks whether w is in the    */
-/*               NVR stack                                              */
+// The nvr stack contains pointers to values, added as names are moved
+// from the queue to the stack.  The LSB of a pointer is set to indicate that the
+// value must have the use count decremented at a safe time.
+// nvrpop(otop): pop stuff off the NVR stack back to the old top otop,
+//  performing deferred frees
+// nvrredef(w):  w is the value of a name about to be redefined
+//   (reassigned or erased).  If w is in the nvr stack, the use count of w
+//   is incremented.  We expect the caller to immediately decrementing the use-count
+//   and we are nullifying that operation
 
+// This design is questionable, because it requires a linear scan of all names extant
+// at all levels of function-call (the scan is performed only during nvrredef, which mitigates
+// the problem).  Also, names once stacked are considered extant for the duration of the sentence.
+// An alternative is to (1) use flags in the block to indicate a block that is extant or has
+// a deferred free outstanding, thus avoiding the search; (2) handle the deferred frees at the end of each action routine,
+// thus reducing the number of extant names.  This should be revisited when we come to
+// dealing with in-place modification.
 
 B jtparseinit(J jt){A x;
- GA(x,INT,20,1,0); ra(x); jt->nvra=x; jt->nvrav=AAV(x);
- GA(x,B01,20,1,0); ra(x); jt->nvrb=x; jt->nvrbv=BAV(x);
+ GA(x,INT,20,1,0); ra(x); jt->nvra=x; jt->nvrav=AAV(x);  // Initial stack.  Size is doubled as needed
  R 1;
 }
 
-static F1(jtnvrpush){
- if(jt->nvrtop==AN(jt->nvra)){
-  RZ(jt->nvra=ext(1,jt->nvra)); jt->nvrav=AAV(jt->nvra);
-  while(AN(jt->nvrb)<AN(jt->nvra))RZ(jt->nvrb=ext(1,jt->nvrb)); jt->nvrbv=BAV(jt->nvrb);
- }
- jt->nvrav[jt->nvrtop]=w;
- jt->nvrbv[jt->nvrtop]=1;
- ++jt->nvrtop;
- R w;
-}
-
-static void jtnvrpop(J jt,I otop){A*v=otop+jt->nvrav;B*b=otop+jt->nvrbv;
- DO(jt->nvrtop-otop, if(!*b++)fa(*v); ++v;);
+// otop is the beginning of the stack.  Find all deferred decrements and perform them
+// We don't inline this because we might need to call it in case of a longjmp() abort
+static void jtnvrpop(J jt,I otop){A*v=otop+jt->nvrav;
+ DO(jt->nvrtop-otop, if(1 & (I)*v)fa((A)((-2) & (I)*v)); ++v;);
  jt->nvrtop=otop;
 }
 
-void jtnvrredef(J jt,A w){A*v=jt->nvrav;B*b=jt->nvrbv;
- DO(jt->nvrtop, if(w==*v++){if(b[i]){ra(w); b[i]=0;} break;});
+// w is a name about to be redefined.  If it is on the nvr list, at any level, set the LSB to indicate
+// a deferred decrement for the block.  We expect that this call will be followed by a fa() call,
+// so we increment this use count id we find a match, to nullify the subsequent fa().
+void jtnvrredef(J jt,A w){A*v=jt->nvrav;I s;
+ // Scan all the extant names, at all levels.  Unchecked names have LSB clear, and match w.  For them,
+ // increment the use count.  If the name has already been decremented, the LSB will be set; return quickly
+ // then, to make sure we don't increment the use count twice by continued scanning 
+ DO(jt->nvrtop, if(0 == (s = (I)w ^ (I)*v)){ra(w); *v = (A)((I)w | 1); break;}else if(s==1) break; ++v;);
 }    /* stack handling for w which is about to be redefined */
 
 // Action routines for the parse, when an executable fragment has been detected.  Each routine must:
@@ -70,16 +73,7 @@ ACTION(jtadv){ jt->sitop->dci = (I)stack[5]; RZ(stack[4] = dfs1(stack[2], stack[
 ACTION(jtconj){ jt->sitop->dci = (I)stack[5]; RZ(stack[6] = dfs2(stack[2], stack[6], stack[4])); stack[7] = stack[3]; stack[5] = stack[1]; stack[4] = stack[0]; R stack + 4; }
 ACTION(jttrident){jt->sitop->dci=(I)(stack[7] = stack[3]); RZ(stack[6] = folk(stack[2], stack[4], stack[6])); stack[5] = stack[1]; stack[4] = stack[0]; R stack + 4; }
 ACTION(jtbident ){jt->sitop->dci=(I)(stack[5] = stack[3]); RZ(stack[4] = hook(stack[2], stack[4])); stack[3] = stack[1]; stack[2] = stack[0]; R stack + 2; }
-ACTION(jtpunc   ){stack[5] = stack[1]; stack[4] = stack[2]; R stack+4;}  // Can't fail; use token # from (
-
-#if 0  // this has been inlined into parsea
-static ACTION(jtmove){A z;
- z=stack[MAX(0,e)];
- if(!(NAME&AT(z))||ASGN&AT(stack[b]))R z;
- RZ(z=jt->xdefn&&NMDOT&NAV(z)->flag?symbrd(z):nameref(z));
- R nvrpush(z);
-}
-#endif
+ACTION(jtpunc   ){stack[5] = stack[1]; stack[4] = stack[2]; R stack+4;}  // Can't fail; use value from expr, token # from (
 
 static F2(jtisf){R symbis(onm(a),CALL1(jt->pre,w,0L),jt->symb);} 
 
@@ -118,13 +112,6 @@ PT cases[] = {
  NAME+NOUN, ASGN,      CAVN, ANY,       jtis,      jtvis,    0,2,1,
  LPAR,      CAVN,      RPAR, ANY,       jtpunc,    jtvpunc,  0,2,0,
 };
-#if 0 // this is the formal search per the Dictionary
-I *c;
-for (i = 0; i<NCASES; i++){
-    c = cases[i].c; s = n + stack;
-    if (*c++&AT(*s++) && *c++&AT(*s++) && *c++&AT(*s++) && *c++&AT(*s++)) break;
-}
-#endif
 
 F1(jtparse){A z;
  RZ(w);
@@ -135,7 +122,7 @@ F1(jtparse){A z;
 }
 
 // Parse a J sentence.  Input is the queue of tokens
-F1(jtparsea){A *stack,*queue,y,z;I es,i,m,otop=jt->nvrtop;                  
+F1(jtparsea){A *stack,*queue,y,z;I es,i,m,otop=jt->nvrtop,maxnvrlen;                  
  RZ(w);
  // This routine has two global responsibilities in addition to parsing.  jt->asgn must be set to 1
  // if the last thing is an assignment, and since this flag is cleared during execution (by ". and
@@ -148,11 +135,25 @@ F1(jtparsea){A *stack,*queue,y,z;I es,i,m,otop=jt->nvrtop;
  // action routine - otherwise we could set it only on failure - but malloc seems to longjmp() in some
  // error cases, so we can't be sure that all function calls will return.  Could that be changed?
  m=AN(w); jt->asgn = 0; ++jt->parsercalls;
- if(1>m)R mark;
+ if(1>m)R mark;  // exit fast if empty input
  // to simulate the mark at the head of the queue, we set queue to point to the -1 position which
  // is an out-of-bounds entry that must never be referenced.  m=0 corresponds to this mark; otherwise queue[m] is original
  // word m-1, with the number in the stack being one higher than the original word number
- queue=AAV(w)-1; 
+ queue=AAV(w)-1;
+// As names are dereferenced, they are added to the nvr queue.  To save time in the loop, we now
+ // make sure there is enough room in the nvr queue to handle all the names we will encounter in
+ // this sentence.  For simplicity's sake, we just assume the worst, that every word is a name, and
+ // make sure there is that much space.  BUT if there were an enormous tacit sentence, that would be
+ // very inefficient.  So, if the sentence is too long, we go through and count the number of names,
+ // rather than using a poor upper bound.
+ if (m < 128)maxnvrlen = m;   // if short enough, assume they're all names
+ else {
+  maxnvrlen = 0;
+  DQ(m, if(NAME==AT(queue[i+1]))++maxnvrlen;)
+ }
+ // extend the nvr stack, doubling its size each time, till it can hold our names
+ while((jt->nvrtop+maxnvrlen) > AN(jt->nvra)){RZ(jt->nvra = ext(1, jt->nvra)); jt->nvrav = AAV(jt->nvra);}
+
  // allocate the stack.  No need to initialize it, except for the marks at the end, because we
  // never look at a stack location until we have moved from the queue to that position.
  // Each word gets two stack locations: first is the word itself, second the original word number+1
@@ -162,6 +163,8 @@ F1(jtparsea){A *stack,*queue,y,z;I es,i,m,otop=jt->nvrtop;
  es = MIN(2,m-1); // number of extra words to pull from the queue.  We always need 2 words afetr the first before a match is possible.
    // but number of pulls, which is 1+es, must never exceed m
  while(1){  // till no more matches possible...
+  // Search for a match per the parse table.  Ordered for speed, taking into account that ) and CONJ
+  // have been shifted out of the first position
 #define ST(i) AT(stack[2*i])
   if(ST(2) & CAVN) { // cases 0-7
    if(ST(0) == NAME)i = 7;   // NAME is set only if followed by ASGN
@@ -215,8 +218,12 @@ F1(jtparsea){A *stack,*queue,y,z;I es,i,m,otop=jt->nvrtop;
      stack[1] = (A)oldm;  // set original word number+1 for the word moved
      if(AT(stack[2])!=ASGN) {  // Replace a name with its value, unless to left of ASGN
       jt->sitop->dci = oldm;   // In case name resolution fails, we'd better have an error word number
+      // Resolve the name.  If the name is x. m. u. etc, always resolve the name to its current value;
+      // otherwise resolve nouns to values, and others to 'name~' references
       if (!(y = jt->xdefn&&NMDOT&NAV(y)->flag ? symbrd(y) : nameref(y))) { stack = 0; goto exitparse; }
-      nvrpush(y);
+      // In case the name is assigned during this sentence, remember the data block that the name created
+      // NOTE: the nvr stack may have been relocated by action routines, so we must refer to the globals
+      jt->nvrav[jt->nvrtop++] = y;
      }
     // If the new word was not a name (whether assigned or not), look to see if it is ) or a conjunction,
     // which allow 2 or 1 more pulls from the queue without checking for a fragment.
@@ -234,7 +241,12 @@ F1(jtparsea){A *stack,*queue,y,z;I es,i,m,otop=jt->nvrtop;
   }
  }  // break with stack==0 on error; main exit is when queue is empty (m<0)
 exitparse:
- nvrpop(otop);
+ // Now that the sentence has completed, take care of some cleanup.  Names that were reassigned after
+ // their value was moved onto the stack had the decrementing of the use count deferred: we decrement
+ // them now (and possibly free them).  This is a bit of a kludge, because the names fall out of circulation
+ // before the end of the sentence, and we should free them ASAP; but it is convenient to wait
+ // till the end of the sentence, as we do here.
+ nvrpop(otop);  // Handle deferred use-count decrementing
  RZ(stack);  // If there was an error during execution or name-stacking, exit with failure
  z=stack[2];   // stack[0..1] are the mark; this is the sentence result, if there is no error
  ASSERT(AT(z)&MARK+CAVN&&AT(stack[4])==MARK,EVSYNTAX);  // OK if 0 or 1 words left (0 should not occur)
