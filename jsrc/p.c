@@ -52,7 +52,6 @@ void jtnvrredef(J jt,A w){A*v=jt->nvrav;I s;
 }    /* stack handling for w which is about to be redefined */
 
 // Action routines for the parse, when an executable fragment has been detected.  Each routine must:
-// set jt->sitop->dci to the word number to flag in case the action fails
 // collect the arguments for the action and run it
 // Return failure if the action failed
 // Save the result in the last stack entry for the fragment
@@ -205,14 +204,16 @@ F1(jtparsea){A *stack,*queue,y,z,*v;I es,i,m,otop=jt->nvrtop,maxnvrlen,*dci=&jt-
                    // sentence will have a syntax error, while RPAR might just be passing through
 
   // end of analysis.  i indicates what we matched
-  if(i&6){  // if not PNOMATCH... (we test this way to get the token-in-error offset)
+  if(i&6){  // if not PNOMATCH... (we test this way to start calculating the token-in-error offset)
    // This is where we execute the action routine.  We give it the stack frame; it is responsible
    // for finding its arguments on the stack, storing the result (if no error) over the last
    // stack entry, then closing up any gap between the front-of-stack and the executed fragment,
    // and finally returning the new front-of-stack pointer
    *dci = (I)stack[(i&6)|1];  // set the token-in-error, using the offset encoded into i
    if(!(stack = casefuncs[i](jt,stack)))FP  // stop parsing in case of error
+
   }else{
+
    // no executable fragment, pull from the stack.  If we pull ')', there is no way we can execute
    // anything till 2 more words have been pulled, so we pull them here to avoid parse overhead.
    // Likewise, if we pull a CONJ, we can safely pull 1 more here.  And first time through, we should
@@ -225,15 +226,15 @@ F1(jtparsea){A *stack,*queue,y,z,*v;I es,i,m,otop=jt->nvrtop,maxnvrlen,*dci=&jt-
      else goto exitparse;   // if there's nothing more to pull, stop big loop
    }
    do{
-    I at, oldm = m;  // type of the new word (before name resolution); m on input (word # of next word)
+    I at;  // type of the new word (before name resolution)
 
     stack -= 2;  // back up to new stack frame, where we will store the new word
 
     // Move in the new word and check its type.  If it is a name that is not being assigned, resolve its
     // value.
-    at=AT(y = queue[m--]);   // known to be nonzero
+    at=AT(y = queue[m]);   // known to be nonzero
     if(at==NAME) {
-     stack[1] = (A)oldm;  // set original word number+1 for the word moved
+     stack[1] = (A)m;  // set original word number+1 for the word moved
      if(AT(stack[2])!=ASGN) {  // Replace a name with its value, unless to left of ASGN
       L* s;  // symbol-table entry for name
 
@@ -242,7 +243,7 @@ F1(jtparsea){A *stack,*queue,y,z,*v;I es,i,m,otop=jt->nvrtop,maxnvrlen,*dci=&jt-
       // otherwise resolve nouns to values, and others to 'name~' references
       // original:     if (!(y = jt->xdefn&&NMDOT&NAV(y)->flag ? symbrd(y) : nameref(y))) { stack = 0; goto exitparse; }
       // To save some overhead, we inline this and do the analysis in a different order here
-      *dci = oldm;  // syrd can fail, so we have to set the error-word number before calling it
+      *dci = m;  // syrd can fail, so we have to set the error-word number before calling it
       if(s=syrd(y,0L)) {   // look up the name in the symbol tables.  0L=Don't bother storing which symbol table was used
         A sv;  // pointer to value block for the name
         
@@ -272,11 +273,13 @@ F1(jtparsea){A *stack,*queue,y,z,*v;I es,i,m,otop=jt->nvrtop,maxnvrlen,*dci=&jt-
     // name that was replaced by name resolution.  We don't care - RPAR was never a name to begin with, and CONJ
     // is much more likely to be a primitive; and we don't want to take the time to refetch the resolved type
     } else if(at&RPAR+CONJ){
-     if(at==RPAR){es = MIN(m,2);}  //  Note we don't set stack[1] for RPAR.  It would be OK to, but we're testing for RPAR anyway, and the word number of RPAR will never be used
-     else{stack[1] = (A)oldm; es = MIN(m,1);}
-    } else{stack[1] = (A)oldm;}   // For all else, just install the word number 
+     if(at==RPAR){es = MIN(m-1,2);}  //  Note we don't set stack[1] for RPAR.  It would be OK to, but we're testing for RPAR anyway, and the word number of RPAR will never be used
+     else{stack[1] = (A)m; es = MIN(m-1,1);}
+    } else{stack[1] = (A)m;}   // For all else, just install the word number 
 
-    // y has the resolved value, which is never a NAME unless there is an assignment
+    --m;   // pop the queue
+
+    // y has the resolved value, which is never a NAME unless there is an assignment immediately following
     stack[0] = y;   // finish setting the stack entry, with the new word
    }while(es-->0);  // Repeat if more pulls required.  We also exit with stack==0 if there is an error
 
@@ -285,11 +288,11 @@ F1(jtparsea){A *stack,*queue,y,z,*v;I es,i,m,otop=jt->nvrtop,maxnvrlen,*dci=&jt-
  }  // break with stack==0 on error; main exit is when queue is empty (m<0)
 exitparse:
 
-// Now that the sentence has completed, take care of some cleanup.  Names that were reassigned after
-// their value was moved onto the stack had the decrementing of the use count deferred: we decrement
-// them now (and possibly free them).  This is a bit of a kludge, because the names fall out of circulation
-// before the end of the sentence, and we should free them ASAP; but it is convenient to wait
-// till the end of the sentence, as we do here.
+ // Now that the sentence has completed, take care of some cleanup.  Names that were reassigned after
+ // their value was moved onto the stack had the decrementing of the use count deferred: we decrement
+ // them now (and possibly free them).  This is a bit of a kludge, because the names fall out of circulation
+ // before the end of the sentence, and we should free them ASAP; but it is convenient to wait
+ // till the end of the sentence, as we do here.
  v=otop+jt->nvrav;  // point to our region of the nvr area
  DO(jt->nvrtop-otop, if(1 & (I)*v)fa((A)~(I)*v); ++v;);   // perform deferred frees.  Test with LSBs in case of 32-bit systems
  jt->nvrtop=otop;  // deallocate the region used in this routine

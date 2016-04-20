@@ -22,6 +22,17 @@ a =: 1e7$2
 multi =: 3 : 'a =: a =: a [ a + a'
 a -: multi^:100 a
 
+NB. Test display of error spacing
+'|domain error: efx|   1    +''a''' -: efx '1 + ''a'''
+'|domain error: efx|   2    /' -: efx '2/'
+'|domain error: efx|       i.0.5' -: efx 'i. 0.5'
+'|domain error: efx|   2    @+i.5' -: efx '2@+ i. 5'
+'|domain error: efx|       (+:+:+:)i.5' -: efx '(+: +: +:) i. 5'
+'|domain error: efx|       (+:+:)i.5' -: efx '(+: +:) i. 5'
+'|value error: undefname|   i__undefname    =:5' -: efx 'i__undefname =: 5'
+'|domain error: efx|   n__efx    =:5' -: efx 'n__efx =: 5'
+'|syntax error: efx|   )123' -: efx ')123'
+
 
 4!:55 ;:'a'
 
