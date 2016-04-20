@@ -42,6 +42,7 @@ F1(jtdomainerr1){ASSERT(0,EVDOMAIN);}
 F2(jtdomainerr2){ASSERT(0,EVDOMAIN);}
 
 // create a block for a function (verb/adv/conj).  The meanings of all fields depend on the function executed in f1/f2
+// if there has been a previous error this function returns 0
 A jtfdef(J jt,C id,I t,AF f1,AF f2,A fs,A gs,A hs,I flag,I m,I l,I r){A z;V*v;
  RE(0);
  GA(z,t,1,0,0); v=VAV(z);
