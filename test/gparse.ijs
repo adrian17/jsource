@@ -18,7 +18,8 @@ NB. test nvr management: many names on a line, and multiple identical nvrs
 a =: 1
 4097 = ". 'a' ,~ ; 4096 # <'a + '
 
-a =: 1e7$2
+NB. Make sure deferred frees are performed, by creating an 800MB array and repeatedly assigning to it
+a =: 1e8$2
 multi =: 3 : 'a =: a =: a [ a + a'
 a -: multi^:100 a
 
@@ -33,7 +34,16 @@ NB. Test display of error spacing
 '|domain error: efx|   n__efx    =:5' -: efx 'n__efx =: 5'
 '|syntax error: efx|   )123' -: efx ')123'
 
+NB. Verify that undefname is OK, but undefined x. creates an error, in an explicit def
+t =: 3 : 0
+undefname/
+x/
+y
+)
 
-4!:55 ;:'a'
+'|value error: t|       x/' -: efx 't 5'
+
+
+4!:55 ;:'a t '
 
 
