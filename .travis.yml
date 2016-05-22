@@ -1,0 +1,18 @@
+language: cpp
+sudo: required
+dist: trusty
+before_install:
+  - sudo apt-get -qq update
+  - sudo apt-get install -y libc6-dev
+install:
+ - mkdir -p ~/gitdev/jsource
+ - cp -r . ~/gitdev/jsource
+ - cd ~/gitdev/jsource
+ - cp jsrc/jversion-x.h jsrc/jversion.h
+ - cp make/jvars.sh ~/jvars.sh
+ - ./make/install.sh j64
+ - ./make/build_jconsole.sh j64
+ - ./make/build_libj.sh     j64
+ - ./make/build_tsdll.sh    j64
+script:
+ - echo "verb = 3" | ~/jbld/j64/bin/jconsole | grep 1
